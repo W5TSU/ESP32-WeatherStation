@@ -1,0 +1,66 @@
+Given this device:
+
+http://davisinstruments.com/products/anemometer-for-vantage-pro2-vantage-pro?srsltid=AfmBOorcd4VqgO9mgKbgHfJZ76xgk3o_C5-NDq3nhL9r0IMNg7_xONhd
+
+
+Wind Speed Translation Formula . . . . . . . . . . . . . . . . . . 1600 rev/hr = 1 mph
+        V = P(2.25/T) (V = speed in mph, P = no. of pulses per sample period
+        T = sample period in seconds)
+Wind Direction Translation . . . . . . . . . . . . . . . . . . . . . . . Variable resistance 0 - 20KΩ; 10KΩ = south, 180°
+
+The code description.
+
+Key Changes and Considerations:
+
+Wind Sensor Pins: Defines WIND_SPEED_PIN and WIND_DIR_PIN for the anemometer and wind vane.
+Wind Speed Variables: Added variables for tracking wind speed pulses and timing (wind_pulse_count, last_wind_sample_time, current_wind_sample_time, wind_sample_period). The wind_sample_period is set to 5 seconds, but you can adjust this.
+Interrupt for Wind Speed: The windPulseCounter() function is attached to the interrupt for the WIND_SPEED_PIN. This function increments the wind_pulse_count every time a pulse is detected from the anemometer. Make sure the interrupt pin can handle pulses.
+calculateWindSpeed(): Calculates wind speed in MPH based on the number of pulses within the sample period, using the formula provided.
+calculateWindDirection(): Calculates wind direction in degrees (0-360) based on the analog reading from the WIND_DIR_PIN. Important: This function assumes a linear relationship between resistance and angle, which might not be accurate for all wind vanes. You will need to calibrate this function based on the specific resistance-to-angle characteristics of your wind vane sensor. I've added some example resistance ranges and angles, but these are placeholders.
+Sensor Data Collection: The GetSensorData() function now reads the wind speed and direction:
+It reads the analog value from the wind direction pin.
+It calculates wind speed and direction using the helper functions.
+It stores the calculated values in the data JSON document.
+The wind speed and direction are only calculated and updated every wind_sample_period seconds.
+Data Logging and Submission: The LogDataToSerial() and WriteDataToSD() functions now include the wind speed and direction values.
+New Parameter Labels: Added WIND_SPEED and WIND_DIRECTION to the parameters.h file (which you should create).
+To Do:
+
+Create parameters.h: You'll need to create a header file named parameters.h in the same directory as your main sketch.  Add the following lines to parameters.h:
+
+C++
+
+#ifndef PARAMETERS_H
+#define PARAMETERS_H
+
+#define TEMPERATURE "temperature"
+#define REL_HUMIDITY "rel_humidity"
+#define PRESSURE "pressure"
+#define PRESSURE_PMSL "pressure_pmsl"
+#define AIR "air"
+#define HEAT_INDEX "heat_index"
+#define DEW_POINT "dew_point"
+#define PM_ENV_1 "pm_env_1"
+#define PM_ENV_25 "pm_env_25"
+#define PM_ENV_100 "pm_env_100"
+#define PARTICLE_SIZE_3 "particle_size_3"
+#define PARTICLE_SIZE_5 "particle_size_5"
+#define PARTICLE_SIZE_10 "particle_size_10"
+#define PARTICLE_SIZE_25 "particle_size_25"
+#define PARTICLE_SIZE_50 "particle_size_50"
+#define PARTICLE_SIZE_100 "particle_size_100"
+#define AQI "aqi"
+#define LIGHT_VISIBLE "light_visible"
+#define LIGHT_IR "light_ir"
+#define LIGHT_UV "light_uv"
+#define UV_INDEX "uv_index"
+#define BATTERY "battery"
+#define WIND_SPEED "wind_speed"      // Add this line
+#define WIND_DIRECTION "wind_direction"  // Add this line
+
+#endif
+Calibrate Wind Direction: The calculateWindDirection() function requires calibration.  The provided code is a placeholder.  You'll need to determine the relationship between the analog readings from your wind vane and the actual wind direction.  This usually involves measuring the resistance at known angles and creating a lookup table or a more accurate conversion formula.
+
+Test Thoroughly: Test the wind speed and direction readings carefully to ensure they are accurate.  You might need to adjust the wind_sample_period and the calculateWindSpeed() function if your anemometer has a different pulse rate.
+
+Let me know if you have any questions or need further assistance with calibration or testing!
