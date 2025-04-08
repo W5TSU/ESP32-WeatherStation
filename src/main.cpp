@@ -4,31 +4,33 @@
  * Version: 2.0.0
  *
  * Controller (Driver):
- *  - ESP32: https://www.adafruit.com/product/3619
- *  - USB / DC / Solar Lithium Ion/Polymer charger: https://www.adafruit.com/product/390
- *  - MicroSD Card Reader: https://www.adafruit.com/product/254
- *  - PCF8523 Real Time Clock: https://www.adafruit.com/product/3295
- *  - Solar Panel (6V 5W): https://www.waveshare.com/solar-panel-6v-5w.htm
+ * - ESP32: https://www.adafruit.com/product/3619
+ * - USB / DC / Solar Lithium Ion/Polymer charger: https://www.adafruit.com/product/390
+ * - MicroSD Card Reader: https://www.adafruit.com/product/254
+ * - PCF8523 Real Time Clock: https://www.adafruit.com/product/3295
+ * - Solar Panel (6V 5W): https://www.waveshare.com/solar-panel-6v-5w.htm
  *
  * Sensors:
- *  - BME680: https://www.adafruit.com/product/3660
- *  - SI1145: https://www.adafruit.com/product/1777
- *  - PMS7003: http://plantower.com/en/
+ * - BME680: https://www.adafruit.com/product/3660
+ * - SI1145: https://www.adafruit.com/product/1777
+ * - PMS7003: http://plantower.com/en/
+ * - Wind Speed (Anemometer): Connect to a digital input pin (e.g., D4)
+ * - Wind Direction (Vane): Connect to an analog input pin (e.g., A0)
  *
  * Stevenson screen (Case):
- *  - La Crosse Sensor Weather Shield: https://www.lacrossetechnology.com/925-1418-sensor-weather-shield
- *  - 1"x0.75mm Fused Silica Disc: https://amazon.com
+ * - La Crosse Sensor Weather Shield: https://www.lacrossetechnology.com/925-1418-sensor-weather-shield
+ * - 1"x0.75mm Fused Silica Disc: https://amazon.com
  *
  * Dependencies:
- *  - ArduinoJson: https://arduinojson.org/  V6.x or above
- *  - WiFi: Arduino IDE
- *  - HTTPClient: Arduino IDE
- *  - WiFiClientSecure: Arduino IDE
- *  - math: Arduino IDE
- *  - BME680: https://github.com/adafruit/Adafruit_BME680
- *  - SI1145: https://github.com/adafruit/Adafruit_SI1145_Library
- *  - PMS5003: https://learn.adafruit.com/pm25-air-quality-sensor/arduino-code
- *  - MicroSD: https://github.com/adafruit/SD
+ * - ArduinoJson: https://arduinojson.org/  V6.x or above
+ * - WiFi: Arduino IDE
+ * - HTTPClient: Arduino IDE
+ * - WiFiClientSecure: Arduino IDE
+ * - math: Arduino IDE
+ * - BME680: https://github.com/adafruit/Adafruit_BME680
+ * - SI1145: https://github.com/adafruit/Adafruit_SI1145_Library
+ * - PMS5003: https://learn.adafruit.com/pm25-air-quality-sensor/arduino-code
+ * - MicroSD: https://github.com/adafruit/SD
  *
  *
  * Ethernet Pin Layout
@@ -56,14 +58,23 @@
 #include <Update.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <cmath> // Required for pow()
 
 /* Github Libraries */
 #include <Plantower_PMS7003.h>
 
 /* Pin allocations */
-#define ADC_PIN A13 // Battery Volatage
-#define BATT_PIN 2  // Battery Volatage
+#define ADC_PIN A13       // Battery Voltage
+#define BATT_PIN 2        // Battery Voltage Control
 #define POWER_SWITCH_PIN A6 // Power Management
+#define WIND_SPEED_PIN 4   // Digital pin for anemometer
+#define WIND_DIR_PIN A0    // Analog pin for wind vane
+
+/* Wind Speed Calculation Variables */
+volatile unsigned long wind_pulse_count = 0;
+unsigned long last_wind_sample_time = 0;
+unsigned long current_wind_sample_time = 0;
+unsigned int wind_sample_period = 5; // Sample period in seconds
 
 /* Set assumed Sealevel Pressure */
 #define SEALEVELPRESSURE_HPA (1013.25)
@@ -116,6 +127,9 @@ void WriteDataToSD(JsonDocument &data);
 void GetSensorData(JsonDocument &data);
 void SubmitSensorData(JsonDocument &data);
 bool HttpsPOSTRequest(WiFiClient &client, JsonDocument &data);
+void IRAM_ATTR windPulseCounter();
+float calculateWindSpeed(unsigned int pulses, unsigned int samplePeriod);
+float calculateWindDirection(int analogValue);
 
 /* Program Setup */
 void setup()
@@ -138,6 +152,10 @@ void setup()
   /* Initialize PMS7001 Sensor */
   Serial1.begin(9600);
   pms7003.init(&Serial1);
+
+  /* Initialize Wind Speed Sensor */
+  pinMode(WIND_SPEED_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(WIND_SPEED_PIN), windPulseCounter, RISING);
 
   /* Check if the RTC PCF8523 is available */
   if (!rtc.begin())
@@ -369,7 +387,7 @@ void saveSettings()
   // close both files
   src.close();
   dst.close();
-  
+
   Serial.println("Settings copied successfully");
 }
 
@@ -439,6 +457,48 @@ void startUpdate()
   updateBin.close();
 }
 
+/* Interrupt Service Routine for Wind Speed Sensor */
+void IRAM_ATTR windPulseCounter()
+{
+  wind_pulse_count++;
+}
+
+/* Calculate Wind Speed */
+float calculateWindSpeed(unsigned int pulses, unsigned int samplePeriod)
+{
+  if (samplePeriod > 0)
+  {
+    float revolutions_per_hour = (float)pulses / samplePeriod * 3600.0;
+    return revolutions_per_hour / 1600.0; // Convert rev/hr to mph
+  }
+  return 0.0;
+}
+
+/* Calculate Wind Direction */
+float calculateWindDirection(int analogValue)
+{
+  // Variable resistance 0 - 20KΩ; 10KΩ = south, 180°
+  // Assuming a somewhat linear response, adjust based on your sensor's characteristics.
+  // This is a simplified approach and might require calibration for accurate readings.
+
+  if (analogValue < 10) return -1.0; // Error condition, very low reading
+
+  float resistance = (float)analogValue * 20000.0 / 4095.0;
+  float angle = 0.0;
+
+  if (resistance < 100)       angle = 0.0;    // Close to 0 ohms
+  else if (resistance < 2000)  angle = 45.0;   // Example: ~1K
+  else if (resistance < 4000)  angle = 90.0;   // Example: ~2K
+  else if (resistance < 6000)  angle = 135.0;  // Example: ~3K
+  else if (resistance < 12000) angle = 180.0;  // 10K
+  else if (resistance < 14000) angle = 225.0;
+  else if (resistance < 16000) angle = 270.0;
+  else if (resistance < 18000) angle = 315.0;
+  else                        angle = 0.0;    // close to 20k
+
+  return angle;
+}
+
 /* Get Sensor Data */
 void GetSensorData(JsonDocument &data)
 {
@@ -488,6 +548,28 @@ void GetSensorData(JsonDocument &data)
   digitalWrite(BATT_PIN, HIGH);
   data["data"][BATTERY] = ((float)analogRead(ADC_PIN) / 4095) * 2 * 3.3 * 1.1; // 7.26;
   digitalWrite(BATT_PIN, LOW);
+
+  // Calculate wind speed and direction
+  current_wind_sample_time = millis();
+  unsigned int time_diff = (current_wind_sample_time - last_wind_sample_time) / 1000; // in seconds
+  if (time_diff >= wind_sample_period)
+  {
+    float windSpeed = calculateWindSpeed(wind_pulse_count, time_diff);
+    int windDirectionRaw = analogRead(WIND_DIR_PIN);
+    float windDirection = calculateWindDirection(windDirectionRaw);
+
+    data["data"][WIND_SPEED] = windSpeed;
+    data["data"][WIND_DIRECTION] = windDirection;
+
+    // Reset for next sample
+    wind_pulse_count = 0;
+    last_wind_sample_time = current_wind_sample_time;
+  }
+  else
+  {
+    data["data"][WIND_SPEED] = 0.0;  // Or a suitable default value
+    data["data"][WIND_DIRECTION] = -1.0; // Or a suitable default value, like -1 to indicate invalid
+  }
 }
 
 /* Log Data on serial */
@@ -553,6 +635,11 @@ void LogDataToSerial(JsonDocument &data)
 
   Serial.print(F("Battery [V]: "));
   Serial.println(data["data"][BATTERY].as<float>());
+
+  Serial.print(F("Wind Speed [mph]: "));
+  Serial.println(data["data"][WIND_SPEED].as<float>());
+  Serial.print(F("Wind Direction [degrees]: "));
+  Serial.println(data["data"][WIND_DIRECTION].as<float>());
 }
 
 /* Write Data to SD */
@@ -606,7 +693,9 @@ void WriteDataToSD(JsonDocument &data)
     dataFile.print(String("\"") + String(LIGHT_IR) + String("\","));
     dataFile.print(String("\"") + String(LIGHT_UV) + String("\","));
     dataFile.print(String("\"") + String(UV_INDEX) + String("\","));
-    dataFile.print(String("\"") + String(BATTERY) + String("\""));
+    dataFile.print(String("\"") + String(BATTERY) + String("\","));
+    dataFile.print(String("\"") + String(WIND_SPEED) + String("\","));
+    dataFile.print(String("\"") + String(WIND_DIRECTION) + String("\""));
     dataFile.println();
     dataFile.close();
   }
@@ -638,7 +727,9 @@ void WriteDataToSD(JsonDocument &data)
     dataFile.print(String(data["data"][LIGHT_IR].as<float>()) + String(","));
     dataFile.print(String(data["data"][LIGHT_UV].as<float>()) + String(","));
     dataFile.print(String(data["data"][UV_INDEX].as<float>()) + String(","));
-    dataFile.print(String(data["data"][BATTERY].as<float>()));
+    dataFile.print(String(data["data"][BATTERY].as<float>()) + String(","));
+    dataFile.print(String(data["data"][WIND_SPEED].as<float>()) + String(","));
+    dataFile.print(String(data["data"][WIND_DIRECTION].as<float>()));
     dataFile.println();
   }
   dataFile.close();
